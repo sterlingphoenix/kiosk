@@ -1,0 +1,35 @@
+[Unit]
+Description=Touch pHAT Video Kiosk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+
+WorkingDirectory=/home/pi/kiosk
+
+# Update yt-dlp before starting the kiosk.
+# Failures are logged but do not prevent startup.
+ExecStartPre=/bin/sh -c '/usr/local/bin/yt-dlp -U 2>&1 | /usr/bin/logger -t kiosk-yt-dlp || true'
+
+# Run the kiosk using the touchphat venv Python
+ExecStart=/home/pi/touchphat/venv/bin/python /home/pi/kiosk/kiosk.py
+
+# If the kiosk crashes, restart it after 10 seconds
+Restart=on-failure
+RestartSec=10
+
+# DRM framebuffer access
+SupplementaryGroups=video render tty
+
+Environment=HOME=/home/pi
+Environment=PYTHONUNBUFFERED=1
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kiosk
+
+[Install]
+WantedBy=multi-user.target
