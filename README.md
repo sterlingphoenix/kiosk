@@ -84,6 +84,7 @@ sudo systemctl restart kiosk.service
   it within 5 seconds.
 - The systemd service restarts the entire kiosk if it crashes.
 - yt-dlp is updated automatically each time the service starts.
+- So is the program itself.
 
 ---
 
