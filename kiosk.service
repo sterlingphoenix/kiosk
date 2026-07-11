@@ -31,8 +31,14 @@ SupplementaryGroups=video render tty
 Environment=HOME=/home/pi
 Environment=PYTHONUNBUFFERED=1
 
-StandardOutput=journal
+# stdout is connected directly to tty2 by systemd (as root, before dropping
+# to the pi user) so the marquee renders on the console. stderr still goes
+# to the journal, keeping logs and display cleanly separated.
+StandardOutput=tty
+TTYPath=/dev/tty2
 StandardError=journal
+TTYReset=yes
+TTYVTDisallocate=yes
 SyslogIdentifier=kiosk
 
 [Install]
