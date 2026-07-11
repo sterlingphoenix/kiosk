@@ -10,6 +10,10 @@ Group=pi
 
 WorkingDirectory=/home/pi/kiosk
 
+# Pull latest app + config from git. Non-fatal so the kiosk still
+# starts on stale files when there's no network.
+ExecStartPre=/bin/sh -c 'git -C /home/pi/kiosk pull || true'
+
 # Update yt-dlp before starting the kiosk.
 # Failures are logged but do not prevent startup.
 ExecStartPre=/bin/sh -c '/usr/local/bin/yt-dlp -U 2>&1 | /usr/bin/logger -t kiosk-yt-dlp || true'
