@@ -2,7 +2,11 @@
 """
 kiosk.py — Touch pHAT video kiosk
 Plays videos assigned to A/B/C/D buttons via mpv.
-Back, Enter, Back, Enter sequence triggers system halt.
+
+Button sequences:
+  Back, Enter, Back, Enter          -> halt the system
+  Back, Back, Back, Back,           -> enable the ssh service (takes effect
+  Enter, Enter, Enter, Enter           next boot); confirmed by an LED blink
 """
 
 import os
@@ -105,6 +109,30 @@ def draw_marquee(vt, description):
     vt.flush()
 
 # ---------------------------------------------------------------------------
+# Touch pHAT LEDs
+# ---------------------------------------------------------------------------
+LED_PADS = ["A", "B", "C", "D", "Back", "Enter"]
+
+def blink_leds(count=3, interval=0.1):
+    """
+    Blink all six Touch pHAT LEDs as visual confirmation.
+    Runs in the calling (callback) thread and blocks it for
+    count * 2 * interval seconds. Auto touch-to-light behaviour
+    resumes on its own afterward (verified on hardware).
+    """
+    import touchphat
+    try:
+        for _ in range(count):
+            for pad in LED_PADS:
+                touchphat.set_led(pad, True)
+            time.sleep(interval)
+            for pad in LED_PADS:
+                touchphat.set_led(pad, False)
+            time.sleep(interval)
+    except Exception as e:
+        log.warning(f"LED blink failed: {e}")
+
+# ---------------------------------------------------------------------------
 # Player
 # ---------------------------------------------------------------------------
 class VideoPlayer:
@@ -196,6 +224,43 @@ class Kiosk:
         self.player.play(target)
 
 # ---------------------------------------------------------------------------
+# Secret button sequences
+# ---------------------------------------------------------------------------
+class SequenceMatcher:
+    """
+    Tracks multiple independent button sequences. Each press is fed to
+    advance(); when any sequence matches in full, its action fires and
+    all progress counters reset.
+    """
+    def __init__(self):
+        self._entries = []  # list of dicts: sequence, action, name, progress
+
+    def add(self, name, sequence, action):
+        self._entries.append({
+            "name":     name,
+            "sequence": sequence,
+            "action":   action,
+            "progress": 0,
+        })
+
+    def advance(self, key):
+        fired = None
+        for e in self._entries:
+            if key == e["sequence"][e["progress"]]:
+                e["progress"] += 1
+                if e["progress"] == len(e["sequence"]):
+                    fired = e
+            else:
+                # Reset, but allow this key to start the sequence over
+                e["progress"] = 1 if key == e["sequence"][0] else 0
+
+        if fired is not None:
+            log.info(f"Sequence '{fired['name']}' complete — firing action.")
+            for e in self._entries:      # reset everything after a match
+                e["progress"] = 0
+            fired["action"]()
+
+# ---------------------------------------------------------------------------
 # Watchdog / main loop
 # ---------------------------------------------------------------------------
 def watchdog_loop(kiosk, poll_interval=5):
@@ -219,31 +284,35 @@ def watchdog_loop(kiosk, poll_interval=5):
     def handle_d(event):
         kiosk.switch_to("D")
 
-    # Back, Enter, Back, Enter sequence = shutdown
-    SHUTDOWN_SEQ = ["Back", "Enter", "Back", "Enter"]
-    seq_progress = [0]  # list so the closure can mutate it
+    # --- secret sequences -------------------------------------------------
+    def action_halt():
+        log.info("Halting system.")
+        kiosk.player.stop()
+        teardown_vt(kiosk.vt)
+        subprocess.run(["sudo", "halt"])
 
-    def handle_seq(key):
-        if key == SHUTDOWN_SEQ[seq_progress[0]]:
-            seq_progress[0] += 1
-            log.info(f"Shutdown sequence: step {seq_progress[0]}/{len(SHUTDOWN_SEQ)}")
-            if seq_progress[0] == len(SHUTDOWN_SEQ):
-                log.info("Shutdown sequence complete — halting system.")
-                kiosk.player.stop()
-                teardown_vt(kiosk.vt)
-                subprocess.run(["sudo", "halt"])
-        else:
-            if seq_progress[0] > 0:
-                log.info(f"Shutdown sequence broken at step {seq_progress[0]} — resetting.")
-            seq_progress[0] = 0
+    def action_enable_ssh():
+        log.info("Enabling ssh service (effective next boot).")
+        try:
+            subprocess.run(["sudo", "systemctl", "enable", "ssh"], check=True)
+            log.info("ssh service enabled.")
+        except Exception as e:
+            log.error(f"Failed to enable ssh: {e}")
+        blink_leds(count=3, interval=0.1)
+
+    sequences = SequenceMatcher()
+    sequences.add("shutdown", ["Back", "Enter", "Back", "Enter"], action_halt)
+    sequences.add("enable_ssh",
+                  ["Back", "Back", "Back", "Back", "Enter", "Enter", "Enter", "Enter"],
+                  action_enable_ssh)
 
     @touchphat.on_touch("Back")
     def handle_back(event):
-        handle_seq("Back")
+        sequences.advance("Back")
 
     @touchphat.on_touch("Enter")
     def handle_enter(event):
-        handle_seq("Enter")
+        sequences.advance("Enter")
 
     # touchphat fully initialised — safe to start mpv
     log.info("Kiosk starting. Auto-playing key A.")
